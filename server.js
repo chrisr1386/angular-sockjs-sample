@@ -1,28 +1,39 @@
-var http = require('http');
-var sockjs = require('sockjs');
+var express = require('express');
+var sockjs  = require('sockjs');
+var http    = require('http');
+var redis   = require('redis');
 
-var connections = [];
 
-var chat = sockjs.createServer();
-chat.on('connection', function(conn) {
-    connections.push(conn);
-    var number = connections.length;
-    conn.write("Welcome, User " + number);
-    conn.on('data', function(message) {
-        for (var ii=0; ii < connections.length; ii++) {
-            connections[ii].write("User " + number + " says: " + message);
-        }
+// Redis publisher
+var publisher = redis.createClient();
+
+// Sockjs server
+var sockjs_opts = {sockjs_url: "http://cdn.sockjs.org/sockjs-0.3.min.js"};
+var sockjs_chat = sockjs.createServer(sockjs_opts);
+sockjs_chat.on('connection', function(conn) {
+    var browser = redis.createClient();
+    browser.subscribe('chat_channel');
+
+    // When we see a message on chat_channel, send it to the browser
+    browser.on("message", function(channel, message){
+        conn.write(message);
     });
-    conn.on('close', function() {
-        for (var ii=0; ii < connections.length; ii++) {
-            connections[ii].write("User " + number + " has disconnected");
-        }
+
+    // When we receive a message from browser, send it to be published
+    conn.on('data', function(message) {
+        publisher.publish('chat_channel', message);
     });
 });
 
-var server = http.createServer();
-chat.installHandlers(server, {prefix:'/chat'});
+// Express server
+var app = express();
+var server = http.createServer(app);
 
-// Start server
-var port = process.env.PORT || 3000;
-server.listen(port)
+sockjs_chat.installHandlers(server, {prefix:'/chat'});
+
+console.log(' [*] Listening on 0.0.0.0:9001' );
+server.listen(9001, '0.0.0.0');
+
+app.get('/', function (req, res) {
+    res.sendfile(__dirname + '/views/index.html');
+});
